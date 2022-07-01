@@ -46,9 +46,10 @@ func main() {
 				Flags: []cli.Flag{
 					serverFlag,
 					tlscaFlag,
-					&cli.StringFlag{
+					&cli.IntFlag{
 						Name:    "count",
 						Aliases: []string{"c"},
+						Value:   1,
 						Usage:   "count of messages to publish",
 					},
 				},
@@ -58,11 +59,15 @@ func main() {
 				Aliases: []string{"s"},
 				Usage:   "complete a task on the list",
 				Action: func(cCtx *cli.Context) error {
-					return subscribe(cCtx.String("servers"), cCtx.String("tlsca"))
+					return subscribe(cCtx.String("servers"), cCtx.String("tlsca"), cCtx.Bool("consumer"))
 				},
 				Flags: []cli.Flag{
 					serverFlag,
 					tlscaFlag,
+					&cli.BoolFlag{
+						Name:  "consumer",
+						Usage: "create a consumer",
+					},
 				},
 			},
 		},
@@ -88,7 +93,7 @@ func publish(servers, tlsca string, count int) error {
 		return err
 	}
 
-	stream, err := js.AddStream(&nats.StreamConfig{
+	_, err = js.AddStream(&nats.StreamConfig{
 		Name:       "test",
 		Storage:    nats.MemoryStorage,
 		Subjects:   []string{"test.>"},
@@ -97,39 +102,23 @@ func publish(servers, tlsca string, count int) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("streamInfo=%+v\n", stream)
 
 	// Publish some messages with duplicates.
-	if ack, err := js.Publish("test.1", []byte("hello"), nats.MsgId("1")); err != nil {
-		return err
-	} else {
-		fmt.Printf("ack=%+v\n", ack)
-	}
-	if ack, err := js.Publish("test.2", []byte("hello"), nats.MsgId("2")); err != nil {
-		return err
-	} else {
-		fmt.Printf("ack=%+v\n", ack)
-	}
-	if ack, err := js.Publish("test.1", []byte("hello"), nats.MsgId("1")); err != nil {
-		return err
-	} else {
-		fmt.Printf("ack=%+v\n", ack)
-	}
-	if ack, err := js.Publish("test.2", []byte("hello"), nats.MsgId("2")); err != nil {
-		return err
-	} else {
-		fmt.Printf("ack=%+v\n", ack)
-	}
-	if ack, err := js.Publish("test.2", []byte("hello"), nats.MsgId("2")); err != nil {
-		return err
-	} else {
-		fmt.Printf("ack=%+v\n", ack)
+	for i := 0; i < count; i++ {
+		now := time.Now()
+		nowStr := now.Format(time.RFC3339Nano)
+		msgData := "hello at " + nowStr
+		if ack, err := js.Publish("test.1", []byte(msgData), nats.MsgId(nowStr)); err != nil {
+			return err
+		} else {
+			fmt.Printf("published msg.Data=%s, msg.ID=%s, ack=%+v\n", msgData, nowStr, ack)
+		}
 	}
 
 	return nil
 }
 
-func subscribe(servers, tlsca string) error {
+func subscribe(servers, tlsca string, createsConsumer bool) error {
 	fmt.Println("subscribe subcommand called: severs=", servers, ", tlscert=", tlsca)
 
 	nc, err := connect(servers, tlsca)
@@ -143,6 +132,18 @@ func subscribe(servers, tlsca string) error {
 	js, err := nc.JetStream(nats.PublishAsyncMaxPending(256), nats.MaxWait(5*time.Second))
 	if err != nil {
 		return err
+	}
+
+	if createsConsumer {
+		_, err = js.AddConsumer("test", &nats.ConsumerConfig{
+			Durable:       "test",
+			AckPolicy:     nats.AckExplicitPolicy,
+			DeliverPolicy: nats.DeliverAllPolicy,
+		})
+		if err != nil {
+			return err
+		}
+		defer js.DeleteConsumer("test", "test")
 	}
 
 	sub, err := js.PullSubscribe("", "test", nats.BindStream("test"))
@@ -159,7 +160,7 @@ func subscribe(servers, tlsca string) error {
 		if err := msg.AckSync(); err != nil {
 			return fmt.Errorf("send ack: %e", err)
 		} else {
-			fmt.Printf("sent ack for msg=%+v\n", msg)
+			fmt.Printf("sent ack for msg.Data=%s, id=%s\n", string(msg.Data), msg.Header.Get("Nats-Msg-Id"))
 		}
 	}
 
@@ -168,8 +169,8 @@ func subscribe(servers, tlsca string) error {
 
 func connect(servers, tlsca string) (*nats.Conn, error) {
 	var opts []nats.Option
-	// if tlsca != "" {
-	// 	opts = append(opts, natscontext.WithCA(tlsca))
-	// }
+	if tlsca != "" {
+		log.Printf("tlsca options is not implemented yet")
+	}
 	return nats.Connect(servers, opts...)
 }
