@@ -610,18 +610,17 @@ func consumerAdd(servers, tlsca, consumerName, streamName string, showJson bool)
 func consumerNext(servers, tlsca, streamName, consumerName string, count int, showJson bool) error {
 	fmt.Println("consumerNext subcommand called: severs=", servers, ", tlscert=", tlsca)
 
-	nc, mgr, err := connectAndSetup(servers, tlsca, nats.UseOldRequestStyle())
-	// nc, err := connect(servers, tlsca, nats.UseOldRequestStyle())
+	nc, err := connect(servers, tlsca)
 	if err != nil {
 		return err
 	}
 	defer nc.Close()
 	fmt.Println("connected")
 
-	// mgr, err := jsm.New(nc)
-	// if err != nil {
-	// 	return err
-	// }
+	mgr, err := jsm.New(nc)
+	if err != nil {
+		return err
+	}
 
 	for i := 0; i < count; i++ {
 		log.Printf("i=%d", i)
@@ -966,33 +965,4 @@ func connect(servers, tlsca string, opts ...nats.Option) (*nats.Conn, error) {
 		log.Printf("tlsca options is not implemented yet")
 	}
 	return nats.Connect(servers, opts...)
-}
-
-func connectAndSetup(servers, tlsca string, opts ...nats.Option) (*nats.Conn, *jsm.Manager, error) {
-	if tlsca != "" {
-		log.Printf("tlsca options is not implemented yet")
-	}
-
-	nc, err := nats.Connect(servers, opts...)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// TODO: setup jsm.Manager
-	jsApiPrefix := ""
-	jsEventPrefix := ""
-	jsDomain := ""
-	timeout := 5 * time.Second
-	jsopts := []jsm.Option{
-		jsm.WithAPIPrefix(jsApiPrefix),
-		jsm.WithEventPrefix(jsEventPrefix),
-		jsm.WithDomain(jsDomain),
-		jsm.WithTimeout(timeout),
-	}
-	mgr, err := jsm.New(nc, jsopts...)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return nc, mgr, nil
 }
