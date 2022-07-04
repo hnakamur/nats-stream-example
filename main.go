@@ -103,6 +103,28 @@ func main() {
 				},
 			},
 			{
+				Name:  "request",
+				Usage: "Request message and wait for a reply",
+				Action: func(cCtx *cli.Context) error {
+					return request(cCtx.String("servers"), cCtx.String("tlsca"), cCtx.String("subject"), cCtx.Int("count"))
+				},
+				Flags: []cli.Flag{
+					serverFlag,
+					tlscaFlag,
+					&cli.StringFlag{
+						Name:     "subject",
+						Required: true,
+						Usage:    "subject to publish to",
+					},
+					&cli.IntFlag{
+						Name:    "count",
+						Aliases: []string{"c"},
+						Value:   1,
+						Usage:   "count of messages to publish",
+					},
+				},
+			},
+			{
 				Name:  "consumer-add",
 				Usage: "Add a consumer",
 				Action: func(cCtx *cli.Context) error {
@@ -129,6 +151,34 @@ func main() {
 				Usage:   "subscribe from consumer",
 				Action: func(cCtx *cli.Context) error {
 					return consumerNext(cCtx.String("servers"), cCtx.String("tlsca"), cCtx.String("stream"), cCtx.String("consumer"), cCtx.Int("count"))
+				},
+				Flags: []cli.Flag{
+					serverFlag,
+					tlscaFlag,
+					&cli.StringFlag{
+						Name:     "stream",
+						Required: true,
+						Usage:    "stream name",
+					},
+					&cli.StringFlag{
+						Name:     "consumer",
+						Required: true,
+						Usage:    "consumer name",
+					},
+					&cli.IntFlag{
+						Name:    "count",
+						Aliases: []string{"c"},
+						Value:   1,
+						Usage:   "count of messages to consume",
+					},
+				},
+			},
+			{
+				Name:    "reply",
+				Aliases: []string{"c"},
+				Usage:   "subscribe from consumer",
+				Action: func(cCtx *cli.Context) error {
+					return reply(cCtx.String("servers"), cCtx.String("tlsca"), cCtx.String("stream"), cCtx.String("consumer"), cCtx.Int("count"))
 				},
 				Flags: []cli.Flag{
 					serverFlag,
@@ -213,6 +263,55 @@ func publish(servers, tlsca, subject string, count int) error {
 		}
 		log.Printf("i=%d, published msg.Data=%s", i, string(msg.Data))
 	}
+
+	return nil
+}
+
+func request(servers, tlsca, subject string, count int) error {
+	nc, err := connect(servers, tlsca)
+	if err != nil {
+		return err
+	}
+	defer nc.Close()
+
+	for i := 0; i < count; i++ {
+		if i > 0 {
+			time.Sleep(time.Second)
+		}
+
+		if err := requestOne(nc, i, subject); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func requestOne(nc *nats.Conn, i int, subject string) error {
+	msg := nats.NewMsg(subject)
+	now := time.Now()
+	msg.Data = []byte(fmt.Sprintf("hello %d at %s", i, now.Format(time.RFC3339Nano)))
+
+	msg.Reply = nc.NewRespInbox()
+	sub, err := nc.SubscribeSync(msg.Reply)
+	if err != nil {
+		return err
+	}
+	defer sub.Unsubscribe()
+
+	if err := nc.PublishMsg(msg); err != nil {
+		return err
+	}
+	start := time.Now()
+	log.Printf("i=%d, published msg.Data=%s", i, string(msg.Data))
+
+	timeout := 5 * time.Second
+	replyMsg, err := sub.NextMsg(timeout)
+	if err != nil {
+		return err
+	}
+	rtt := time.Since(start)
+	log.Printf("i=%d, reply msg.Data=%s, rtt=%s", i, string(replyMsg.Data), rtt)
 
 	return nil
 }
@@ -316,6 +415,90 @@ func getNextMsgDirect(nc *nats.Conn, js nats.JetStreamContext, stream, consumer 
 		return err
 	}
 	if err := nc.Flush(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func reply(servers, tlsca, streamName, consumerName string, count int) error {
+	nc, err := connect(servers, tlsca)
+	if err != nil {
+		return err
+	}
+	defer nc.Close()
+
+	js, err := nc.JetStream()
+	if err != nil {
+		return err
+	}
+
+	for i := 0; i < count; i++ {
+		log.Printf("i=%d", i)
+		if err := getNextMsgAndReply(nc, js, streamName, consumerName); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func getNextMsgAndReply(nc *nats.Conn, js nats.JetStreamContext, stream, consumer string) error {
+	sub, err := js.PullSubscribe("", consumer, nats.BindStream(stream))
+	if err != nil {
+		return err
+	}
+	sub.AutoUnsubscribe(1)
+
+	batch := 1
+	timeout := 5 * time.Second
+	msgs, err := sub.Fetch(batch, nats.MaxWait(timeout))
+	if err != nil {
+		return err
+	}
+	if len(msgs) != 1 {
+		return fmt.Errorf("unexpected count of messaged fetched: %d", len(msgs))
+	}
+
+	msg := msgs[0]
+
+	if msg.Header != nil && msg.Header.Get("Status") == "503" {
+		return errors.New("got 503 Status in msg header")
+	}
+
+	metadata, err := msg.Metadata()
+	if err != nil {
+		if msg.Reply == "" {
+			fmt.Printf("--- subject: %s\n", msg.Subject)
+		} else {
+			fmt.Printf("--- subject: %s reply: %s\n", msg.Subject, msg.Reply)
+		}
+		return err
+	}
+	fmt.Printf("[%s] subj: %s / tries: %d / cons seq: %d / str seq: %d / pending: %d\n", time.Now().Format("15:04:05"), msg.Subject, metadata.NumDelivered, metadata.Sequence.Consumer, metadata.Sequence.Stream, metadata.NumPending)
+	if len(msg.Header) > 0 {
+		fmt.Println("Headers:")
+		for h, vals := range msg.Header {
+			for _, val := range vals {
+				fmt.Printf("  %s: %s\n", h, val)
+			}
+		}
+
+		fmt.Println()
+		fmt.Println("Data:")
+	}
+
+	fmt.Println(string(msg.Data))
+	fmt.Println()
+
+	replyMsg := nats.NewMsg(msg.Reply)
+	replyMsg.Data = []byte(fmt.Sprintf("reply for %s at %s", string(msg.Data), time.Now().Format(time.RFC3339Nano)))
+	if err := msg.RespondMsg(replyMsg); err != nil {
+		return err
+	}
+	if err := nc.Flush(); err != nil {
+		return err
+	}
+	if err := nc.LastError(); err != nil {
 		return err
 	}
 	return nil
