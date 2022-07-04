@@ -23,13 +23,13 @@ func main() {
 		Aliases: []string{"s"},
 		Value:   "",
 		Usage:   "comma separated values of server URLs",
-		EnvVars: []string{"SERVERS"},
+		EnvVars: []string{"NATS_URL"},
 	}
 	tlscaFlag := &cli.StringFlag{
 		Name:    "tlsca",
 		Aliases: []string{"a"},
 		Usage:   "TLS CA certificate path",
-		EnvVars: []string{"TLSCA"},
+		EnvVars: []string{"NATS_CA"},
 	}
 
 	app := &cli.App{
@@ -301,8 +301,9 @@ func getNextMsgDirect(nc *nats.Conn, js nats.JetStreamContext, stream, consumer 
 }
 
 func connect(servers, tlsca string, opts ...nats.Option) (*nats.Conn, error) {
+	log.Printf("connect servers=%s, tlsca=%s", servers, tlsca)
 	if tlsca != "" {
-		log.Printf("tlsca options is not implemented yet")
+		opts = append(opts, nats.RootCAs(tlsca))
 	}
 	return nats.Connect(servers, opts...)
 }
