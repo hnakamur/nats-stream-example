@@ -1,9 +1,9 @@
 nats-stream-example
 ===================
 
-An example for NATS Jetstream.
+An example for [JetStream Walkthrough - NATS Docs](https://docs.nats.io/nats-concepts/jetstream/js_walkthrough).
 
-Based on https://stackoverflow.com/a/72815187/1391518
+Based on a lot of code copied from [nats-io/natscli: The NATS Command Line Interface](https://github.com/nats-io/natscli).
 
 ## My experiment result
 
