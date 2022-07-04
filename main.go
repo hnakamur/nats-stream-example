@@ -41,7 +41,7 @@ func main() {
 				Name:  "stream-add",
 				Usage: "Add a stream",
 				Action: func(cCtx *cli.Context) error {
-					return streamAdd(cCtx.String("servers"), cCtx.String("tlsca"), cCtx.String("stream"), cCtx.String("subject"))
+					return streamAdd(cCtx.String("servers"), cCtx.String("tlsca"), cCtx.String("stream"), cCtx.String("subject"), cCtx.Int("replicas"))
 				},
 				Flags: []cli.Flag{
 					serverFlag,
@@ -55,6 +55,11 @@ func main() {
 						Name:     "subject",
 						Required: true,
 						Usage:    "subject to consume",
+					},
+					&cli.IntFlag{
+						Name:  "replicas",
+						Value: 1,
+						Usage: "number of replicas replicas are kept for the stream data",
 					},
 				},
 			},
@@ -138,7 +143,7 @@ func main() {
 	}
 }
 
-func streamAdd(servers, tlsca, streamName, subject string) error {
+func streamAdd(servers, tlsca, streamName, subject string, replicas int) error {
 	nc, err := connect(servers, tlsca)
 	if err != nil {
 		return err
@@ -157,7 +162,7 @@ func streamAdd(servers, tlsca, streamName, subject string) error {
 		Retention:  nats.LimitsPolicy,
 		Discard:    nats.DiscardOld,
 		Duplicates: 2 * time.Minute,
-		Replicas:   1,
+		Replicas:   replicas,
 	}
 	_, err = js.AddStream(streamCfg)
 	if err != nil {
