@@ -41,7 +41,18 @@ func main() {
 				Name:  "stream-add",
 				Usage: "Add a stream",
 				Action: func(cCtx *cli.Context) error {
-					return streamAdd(cCtx.String("servers"), cCtx.String("tlsca"), cCtx.String("stream"), cCtx.String("subject"), cCtx.Int("replicas"))
+					var retention nats.RetentionPolicy
+					switch cCtx.String("retention") {
+					case "limits":
+						retention = nats.LimitsPolicy
+					case "interest":
+						retention = nats.InterestPolicy
+					case "work":
+						retention = nats.WorkQueuePolicy
+					default:
+						return errors.New("retention must be one of limits, interest, work")
+					}
+					return streamAdd(cCtx.String("servers"), cCtx.String("tlsca"), cCtx.String("stream"), cCtx.String("subject"), retention, cCtx.Int("replicas"))
 				},
 				Flags: []cli.Flag{
 					serverFlag,
@@ -60,6 +71,11 @@ func main() {
 						Name:  "replicas",
 						Value: 1,
 						Usage: "number of replicas replicas are kept for the stream data",
+					},
+					&cli.StringFlag{
+						Name:  "retention",
+						Value: "limits",
+						Usage: "Defines a retention policy (limits, interest, work)",
 					},
 				},
 			},
@@ -143,7 +159,7 @@ func main() {
 	}
 }
 
-func streamAdd(servers, tlsca, streamName, subject string, replicas int) error {
+func streamAdd(servers, tlsca, streamName, subject string, retention nats.RetentionPolicy, replicas int) error {
 	nc, err := connect(servers, tlsca)
 	if err != nil {
 		return err
@@ -159,7 +175,7 @@ func streamAdd(servers, tlsca, streamName, subject string, replicas int) error {
 		Name:       streamName,
 		Subjects:   []string{subject},
 		Storage:    nats.FileStorage,
-		Retention:  nats.LimitsPolicy,
+		Retention:  retention,
 		Discard:    nats.DiscardOld,
 		Duplicates: 2 * time.Minute,
 		Replicas:   replicas,
