@@ -25,30 +25,30 @@ $ ./nats-server -js
 2. Create a stream.
 
 ```
-$ ./nats-stream-example stream-add --json --stream my_stream2 --subject foo2
+$ ./nats-stream-example stream-add --stream my_stream2 --subject foo2
 ```
 
 3. Create a consumer
 
 ```
-$ ./nats-stream-example consumer-add --json --consumer pull_consumer2 --stream my_stream2
+$ ./nats-stream-example consumer-add --consumer pull_consumer2 --stream my_stream2
 ```
 
 4. Publish some messages into the stream.
 
 ```
-$ ./nats-stream-example ^Cblish --subject foo2 --count 100
+$ ./nats-stream-example publish --subject foo2 --count 100
 ```
 
 It prints the following output:
 
 ```
-2022/07/04 13:08:06 i=0, published msg.Data=hello 0 at 2022-07-04T13:08:06.558232222+09:00
-2022/07/04 13:08:07 i=1, published msg.Data=hello 1 at 2022-07-04T13:08:07.55895319+09:00
-2022/07/04 13:08:08 i=2, published msg.Data=hello 2 at 2022-07-04T13:08:08.55968631+09:00
-2022/07/04 13:08:09 i=3, published msg.Data=hello 3 at 2022-07-04T13:08:09.560974119+09:00
-2022/07/04 13:08:10 i=4, published msg.Data=hello 4 at 2022-07-04T13:08:10.561926754+09:00
-2022/07/04 13:08:11 i=5, published msg.Data=hello 5 at 2022-07-04T13:08:11.562620345+09:00
+2022/07/04 14:03:14 i=0, published msg.Data=hello 0 at 2022-07-04T14:03:14.034590226+09:00
+2022/07/04 14:03:15 i=1, published msg.Data=hello 1 at 2022-07-04T14:03:15.035388189+09:00
+2022/07/04 14:03:16 i=2, published msg.Data=hello 2 at 2022-07-04T14:03:16.036276313+09:00
+2022/07/04 14:03:17 i=3, published msg.Data=hello 3 at 2022-07-04T14:03:17.037197884+09:00
+2022/07/04 14:03:18 i=4, published msg.Data=hello 4 at 2022-07-04T14:03:18.038115187+09:00
+2022/07/04 14:03:19 i=5, published msg.Data=hello 5 at 2022-07-04T14:03:19.039166581+09:00
 ...
 ```
 
@@ -63,28 +63,29 @@ $ ./nats-stream-example consumer-next --stream my_stream2 --consumer pull_consum
 It prints the following output:
 
 ```
-2022/07/04 13:08:08 i=0
-[13:08:08] subj: foo2 / tries: 1 / cons seq: 1 / str seq: 1 / pending: 2
-hello 0 at 2022-07-04T13:08:06.558232222+09:00
+2022/07/04 14:03:15 i=0
+[14:03:15] subj: foo2 / tries: 1 / cons seq: 1 / str seq: 1 / pending: 1
+hello 0 at 2022-07-04T14:03:14.034590226+09:00
 
-2022/07/04 13:08:08 i=1
-[13:08:08] subj: foo2 / tries: 1 / cons seq: 2 / str seq: 2 / pending: 1
-hello 1 at 2022-07-04T13:08:07.55895319+09:00
+2022/07/04 14:03:15 i=1
+[14:03:15] subj: foo2 / tries: 1 / cons seq: 2 / str seq: 2 / pending: 0
+hello 1 at 2022-07-04T14:03:15.035388189+09:00
 
-2022/07/04 13:08:08 i=2
-[13:08:08] subj: foo2 / tries: 1 / cons seq: 3 / str seq: 3 / pending: 0
-hello 2 at 2022-07-04T13:08:08.55968631+09:00
+2022/07/04 14:03:15 i=2
+[14:03:16] subj: foo2 / tries: 1 / cons seq: 3 / str seq: 3 / pending: 0
+hello 2 at 2022-07-04T14:03:16.036276313+09:00
 
-2022/07/04 13:08:08 i=3
-[13:08:09] subj: foo2 / tries: 1 / cons seq: 4 / str seq: 4 / pending: 0
-hello 3 at 2022-07-04T13:08:09.560974119+09:00
+2022/07/04 14:03:16 i=3
+[14:03:17] subj: foo2 / tries: 1 / cons seq: 4 / str seq: 4 / pending: 0
+hello 3 at 2022-07-04T14:03:17.037197884+09:00
 
-2022/07/04 13:08:09 i=4
-[13:08:10] subj: foo2 / tries: 1 / cons seq: 5 / str seq: 5 / pending: 0
-hello 4 at 2022-07-04T13:08:10.561926754+09:00
+2022/07/04 14:03:17 i=4
+[14:03:18] subj: foo2 / tries: 1 / cons seq: 5 / str seq: 5 / pending: 0
+hello 4 at 2022-07-04T14:03:18.038115187+09:00
 
-2022/07/04 13:08:10 i=5
-[13:08:11] subj: foo2 / tries: 1 / cons seq: 6 / str seq: 6 / pending: 0
-hello 5 at 2022-07-04T13:08:11.562620345+09:00
+2022/07/04 14:03:18 i=5
+[14:03:19] subj: foo2 / tries: 1 / cons seq: 6 / str seq: 6 / pending: 0
+hello 5 at 2022-07-04T14:03:19.039166581+09:00
+
 ...
 ```

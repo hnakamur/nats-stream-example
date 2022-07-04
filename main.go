@@ -1,13 +1,12 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"time"
 
-	"github.com/nats-io/jsm.go"
-	"github.com/nats-io/jsm.go/api"
 	"github.com/nats-io/nats.go"
 	"github.com/urfave/cli/v2"
 )
@@ -146,21 +145,21 @@ func streamAdd(servers, tlsca, streamName, subject string) error {
 	}
 	defer nc.Close()
 
-	mgr, err := jsm.New(nc)
+	js, err := nc.JetStream()
 	if err != nil {
 		return err
 	}
 
-	streamCfg := api.StreamConfig{
+	streamCfg := &nats.StreamConfig{
 		Name:       streamName,
 		Subjects:   []string{subject},
-		Storage:    api.FileStorage,
-		Retention:  api.LimitsPolicy,
-		Discard:    api.DiscardOld,
+		Storage:    nats.FileStorage,
+		Retention:  nats.LimitsPolicy,
+		Discard:    nats.DiscardOld,
 		Duplicates: 2 * time.Minute,
 		Replicas:   1,
 	}
-	_, err = mgr.NewStreamFromDefault(streamName, streamCfg)
+	_, err = js.AddStream(streamCfg)
 	if err != nil {
 		return err
 	}
@@ -204,18 +203,18 @@ func consumerAdd(servers, tlsca, consumerName, streamName string) error {
 	}
 	defer nc.Close()
 
-	mgr, err := jsm.New(nc)
+	js, err := nc.JetStream()
 	if err != nil {
 		return err
 	}
 
-	consumerCfg := api.ConsumerConfig{
+	consumerCfg := &nats.ConsumerConfig{
 		Durable:       consumerName,
-		DeliverPolicy: api.DeliverAll,
-		ReplayPolicy:  api.ReplayInstant,
-		AckPolicy:     api.AckExplicit,
+		DeliverPolicy: nats.DeliverAllPolicy,
+		ReplayPolicy:  nats.ReplayInstantPolicy,
+		AckPolicy:     nats.AckExplicitPolicy,
 	}
-	_, err = mgr.NewConsumerFromDefault(streamName, consumerCfg)
+	_, err = js.AddConsumer(streamName, consumerCfg)
 	if err != nil {
 		return err
 	}
@@ -229,14 +228,14 @@ func consumerNext(servers, tlsca, streamName, consumerName string, count int) er
 	}
 	defer nc.Close()
 
-	mgr, err := jsm.New(nc)
+	js, err := nc.JetStream()
 	if err != nil {
 		return err
 	}
 
 	for i := 0; i < count; i++ {
 		log.Printf("i=%d", i)
-		if err := getNextMsgDirect(nc, mgr, streamName, consumerName); err != nil {
+		if err := getNextMsgDirect(nc, js, streamName, consumerName); err != nil {
 			return err
 		}
 	}
@@ -244,40 +243,30 @@ func consumerNext(servers, tlsca, streamName, consumerName string, count int) er
 	return nil
 }
 
-func getNextMsgDirect(nc *nats.Conn, mgr *jsm.Manager, stream, consumer string) error {
-	sub, err := nc.SubscribeSync(nc.NewRespInbox())
+func getNextMsgDirect(nc *nats.Conn, js nats.JetStreamContext, stream, consumer string) error {
+	sub, err := js.PullSubscribe("", consumer, nats.BindStream(stream))
 	if err != nil {
 		return err
 	}
 	sub.AutoUnsubscribe(1)
 
+	batch := 1
 	timeout := 5 * time.Second
-	req := &api.JSApiConsumerGetNextRequest{Batch: 1, Expires: timeout}
-	if err := mgr.NextMsgRequest(stream, consumer, sub.Subject, req); err != nil {
-		return err
-	}
-
-	fatalIfNotPull := func() {
-		cons, err := mgr.LoadConsumer(stream, consumer)
-		if err != nil {
-			log.Fatalf("could not load consumer %q, err=%v", consumer, err)
-		}
-
-		if !cons.IsPullMode() {
-			log.Fatalf("consumer %q is not a Pull consumer", consumer)
-		}
-	}
-
-	msg, err := sub.NextMsg(timeout)
+	msgs, err := sub.Fetch(batch, nats.MaxWait(timeout))
 	if err != nil {
 		return err
 	}
-
-	if msg.Header != nil && msg.Header.Get("Status") == "503" {
-		fatalIfNotPull()
+	if len(msgs) != 1 {
+		return fmt.Errorf("unexpected count of messaged fetched: %d", len(msgs))
 	}
 
-	metadata, err := jsm.ParseJSMsgMetadata(msg)
+	msg := msgs[0]
+
+	if msg.Header != nil && msg.Header.Get("Status") == "503" {
+		return errors.New("got 503 Status in msg header")
+	}
+
+	metadata, err := msg.Metadata()
 	if err != nil {
 		if msg.Reply == "" {
 			fmt.Printf("--- subject: %s\n", msg.Subject)
@@ -286,7 +275,7 @@ func getNextMsgDirect(nc *nats.Conn, mgr *jsm.Manager, stream, consumer string) 
 		}
 		return err
 	}
-	fmt.Printf("[%s] subj: %s / tries: %d / cons seq: %d / str seq: %d / pending: %d\n", time.Now().Format("15:04:05"), msg.Subject, metadata.Delivered(), metadata.ConsumerSequence(), metadata.StreamSequence(), metadata.Pending())
+	fmt.Printf("[%s] subj: %s / tries: %d / cons seq: %d / str seq: %d / pending: %d\n", time.Now().Format("15:04:05"), msg.Subject, metadata.NumDelivered, metadata.Sequence.Consumer, metadata.Sequence.Stream, metadata.NumPending)
 	if len(msg.Header) > 0 {
 		fmt.Println("Headers:")
 		for h, vals := range msg.Header {
