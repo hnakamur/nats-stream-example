@@ -177,7 +177,7 @@ func main() {
 				Name:  "reply",
 				Usage: "subscribe from consumer",
 				Action: func(cCtx *cli.Context) error {
-					return reply(cCtx.String("servers"), cCtx.String("tlsca"), cCtx.String("stream"), cCtx.String("consumer"), cCtx.Int("count"))
+					return reply(cCtx.String("servers"), cCtx.String("tlsca"), cCtx.String("stream"), cCtx.String("consumer"), cCtx.Duration("wait"), cCtx.Int("count"))
 				},
 				Flags: []cli.Flag{
 					serverFlag,
@@ -191,6 +191,10 @@ func main() {
 						Name:     "consumer",
 						Required: true,
 						Usage:    "consumer name",
+					},
+					&cli.DurationFlag{
+						Name:  "wait",
+						Usage: "duration to sleep before reply",
 					},
 					&cli.IntFlag{
 						Name:    "count",
@@ -423,7 +427,7 @@ func getNextMsgDirect(nc *nats.Conn, js nats.JetStreamContext, stream, consumer 
 	return nil
 }
 
-func reply(servers, tlsca, streamName, consumerName string, count int) error {
+func reply(servers, tlsca, streamName, consumerName string, wait time.Duration, count int) error {
 	nc, err := connect(servers, tlsca)
 	if err != nil {
 		return err
@@ -437,7 +441,7 @@ func reply(servers, tlsca, streamName, consumerName string, count int) error {
 
 	for i := 0; i < count; i++ {
 		log.Printf("i=%d", i)
-		if err := getNextMsgAndReply(nc, js, streamName, consumerName); err != nil {
+		if err := getNextMsgAndReply(nc, js, streamName, consumerName, wait); err != nil {
 			return err
 		}
 	}
@@ -445,7 +449,7 @@ func reply(servers, tlsca, streamName, consumerName string, count int) error {
 	return nil
 }
 
-func getNextMsgAndReply(nc *nats.Conn, js nats.JetStreamContext, stream, consumer string) error {
+func getNextMsgAndReply(nc *nats.Conn, js nats.JetStreamContext, stream, consumer string, wait time.Duration) error {
 	sub, err := js.PullSubscribe("", consumer, nats.BindStream(stream))
 	if err != nil {
 		return err
@@ -493,13 +497,18 @@ func getNextMsgAndReply(nc *nats.Conn, js nats.JetStreamContext, stream, consume
 	fmt.Println(string(msg.Data))
 	fmt.Println()
 
+	if wait > 0 {
+		time.Sleep(wait)
+	}
+
 	replySubject := msg.Header.Get(MyReplySubjectHdr)
 	if replySubject == "" {
 		return errors.New("reply subject header is not set")
 	}
 
 	replyMsg := nats.NewMsg(replySubject)
-	replyMsg.Data = []byte(fmt.Sprintf("reply for %s at %s", string(msg.Data), time.Now().Format(time.RFC3339Nano)))
+	replyDataStr := fmt.Sprintf("reply for %s at %s", string(msg.Data), time.Now().Format(time.RFC3339Nano))
+	replyMsg.Data = []byte(replyDataStr)
 	if err := nc.PublishMsg(replyMsg); err != nil {
 		return err
 	}
@@ -509,6 +518,7 @@ func getNextMsgAndReply(nc *nats.Conn, js nats.JetStreamContext, stream, consume
 	if err := nc.LastError(); err != nil {
 		return err
 	}
+	log.Printf("sent reply %s", replyDataStr)
 	return nil
 }
 
