@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -106,7 +107,8 @@ func main() {
 				Name:  "request",
 				Usage: "Request message and wait for a reply",
 				Action: func(cCtx *cli.Context) error {
-					return request(cCtx.String("servers"), cCtx.String("tlsca"), cCtx.String("subject"), cCtx.Int("count"))
+					return request(cCtx.String("servers"), cCtx.String("tlsca"), cCtx.String("subject"),
+						cCtx.String("reply-subject"), cCtx.String("reply-stream"), cCtx.String("reply-consumer"), cCtx.Int("count"))
 				},
 				Flags: []cli.Flag{
 					serverFlag,
@@ -115,6 +117,21 @@ func main() {
 						Name:     "subject",
 						Required: true,
 						Usage:    "subject to publish to",
+					},
+					&cli.StringFlag{
+						Name:     "reply-subject",
+						Required: true,
+						Usage:    "subject to receive replies from",
+					},
+					&cli.StringFlag{
+						Name:     "reply-stream",
+						Required: true,
+						Usage:    "stream to receive replies from",
+					},
+					&cli.StringFlag{
+						Name:     "reply-consumer",
+						Required: true,
+						Usage:    "consumer to receive replies",
 					},
 					&cli.IntFlag{
 						Name:    "count",
@@ -270,21 +287,39 @@ func publish(servers, tlsca, subject string, count int) error {
 	return nil
 }
 
-func request(servers, tlsca, subject string, count int) error {
+func request(servers, tlsca, subject, replySubject, replyStream, replyConsumer string, count int) error {
 	nc, err := connect(servers, tlsca)
 	if err != nil {
 		return err
 	}
 	defer nc.Close()
 
+	errC := make(chan error, 1)
+	go func() {
+		err := receiveReply(nc, count, replyStream, replyConsumer)
+		errC <- err
+	}()
+
 	for i := 0; i < count; i++ {
 		if i > 0 {
 			time.Sleep(time.Second)
 		}
 
-		if err := requestOne(nc, i, subject); err != nil {
+		if err := requestOne(nc, i, subject, replySubject); err != nil {
 			return err
 		}
+
+		select {
+		case err := <-errC:
+			return err
+		default:
+		}
+	}
+
+	select {
+	case err := <-errC:
+		return err
+	default:
 	}
 
 	return nil
@@ -292,12 +327,13 @@ func request(servers, tlsca, subject string, count int) error {
 
 const MyReplySubjectHdr = "My-Reply-Subject"
 
-func requestOne(nc *nats.Conn, i int, subject string) error {
-	replySubject := nc.NewRespInbox()
+func requestOne(nc *nats.Conn, i int, subject, replySubject string) error {
+	now := time.Now()
+	msgId := strconv.FormatInt(now.UnixNano(), 10)
 
 	msg := nats.NewMsg(subject)
 	msg.Header.Set(MyReplySubjectHdr, replySubject)
-	now := time.Now()
+	msg.Header.Set(nats.MsgIdHdr, msgId)
 	msg.Data = []byte(fmt.Sprintf("hello %d at %s", i, now.Format(time.RFC3339Nano)))
 
 	sub, err := nc.SubscribeSync(replySubject)
@@ -319,6 +355,22 @@ func requestOne(nc *nats.Conn, i int, subject string) error {
 	}
 	rtt := time.Since(start)
 	log.Printf("i=%d, reply msg.Data=%s, rtt=%s", i, string(replyMsg.Data), rtt)
+
+	return nil
+}
+
+func receiveReply(nc *nats.Conn, count int, replyStream, replyConsumer string) error {
+	js, err := nc.JetStream()
+	if err != nil {
+		return err
+	}
+
+	for i := 0; i < count; i++ {
+		log.Printf("receiving reply i=%d", i)
+		if err := getNextMsgDirect(nc, js, replyStream, replyConsumer); err != nil {
+			return err
+		}
+	}
 
 	return nil
 }
@@ -371,6 +423,7 @@ func consumerNext(servers, tlsca, streamName, consumerName string, count int) er
 }
 
 func getNextMsgDirect(nc *nats.Conn, js nats.JetStreamContext, stream, consumer string) error {
+	log.Printf("getNextMsgDirect start, stream=%s, consumer=%s", stream, consumer)
 	sub, err := js.PullSubscribe("", consumer, nats.BindStream(stream))
 	if err != nil {
 		return err
@@ -380,6 +433,7 @@ func getNextMsgDirect(nc *nats.Conn, js nats.JetStreamContext, stream, consumer 
 	batch := 1
 	timeout := 5 * time.Second
 	msgs, err := sub.Fetch(batch, nats.MaxWait(timeout))
+	log.Printf("getNextMsgDirect after Fetch, len(msgs)=%d, err=%v", len(msgs), err)
 	if err != nil {
 		return err
 	}
