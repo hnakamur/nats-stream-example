@@ -174,9 +174,8 @@ func main() {
 				},
 			},
 			{
-				Name:    "reply",
-				Aliases: []string{"c"},
-				Usage:   "subscribe from consumer",
+				Name:  "reply",
+				Usage: "subscribe from consumer",
 				Action: func(cCtx *cli.Context) error {
 					return reply(cCtx.String("servers"), cCtx.String("tlsca"), cCtx.String("stream"), cCtx.String("consumer"), cCtx.Int("count"))
 				},
@@ -287,13 +286,17 @@ func request(servers, tlsca, subject string, count int) error {
 	return nil
 }
 
+const MyReplySubjectHdr = "My-Reply-Subject"
+
 func requestOne(nc *nats.Conn, i int, subject string) error {
+	replySubject := nc.NewRespInbox()
+
 	msg := nats.NewMsg(subject)
+	msg.Header.Set(MyReplySubjectHdr, replySubject)
 	now := time.Now()
 	msg.Data = []byte(fmt.Sprintf("hello %d at %s", i, now.Format(time.RFC3339Nano)))
 
-	msg.Reply = nc.NewRespInbox()
-	sub, err := nc.SubscribeSync(msg.Reply)
+	sub, err := nc.SubscribeSync(replySubject)
 	if err != nil {
 		return err
 	}
@@ -490,9 +493,14 @@ func getNextMsgAndReply(nc *nats.Conn, js nats.JetStreamContext, stream, consume
 	fmt.Println(string(msg.Data))
 	fmt.Println()
 
-	replyMsg := nats.NewMsg(msg.Reply)
+	replySubject := msg.Header.Get(MyReplySubjectHdr)
+	if replySubject == "" {
+		return errors.New("reply subject header is not set")
+	}
+
+	replyMsg := nats.NewMsg(replySubject)
 	replyMsg.Data = []byte(fmt.Sprintf("reply for %s at %s", string(msg.Data), time.Now().Format(time.RFC3339Nano)))
-	if err := msg.RespondMsg(replyMsg); err != nil {
+	if err := nc.PublishMsg(replyMsg); err != nil {
 		return err
 	}
 	if err := nc.Flush(); err != nil {
