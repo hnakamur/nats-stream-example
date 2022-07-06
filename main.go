@@ -106,7 +106,7 @@ func main() {
 				Name:  "request",
 				Usage: "Request message and wait for a reply",
 				Action: func(cCtx *cli.Context) error {
-					return request(cCtx.String("servers"), cCtx.String("tlsca"), cCtx.String("subject"), cCtx.Int("count"))
+					return request(cCtx.String("servers"), cCtx.String("tlsca"), cCtx.String("subject"), cCtx.Int("reply-count"), cCtx.Int("count"))
 				},
 				Flags: []cli.Flag{
 					serverFlag,
@@ -115,6 +115,11 @@ func main() {
 						Name:     "subject",
 						Required: true,
 						Usage:    "subject to publish to",
+					},
+					&cli.IntFlag{
+						Name:  "reply-count",
+						Value: 1,
+						Usage: "reply count to expect",
 					},
 					&cli.IntFlag{
 						Name:    "count",
@@ -270,7 +275,7 @@ func publish(servers, tlsca, subject string, count int) error {
 	return nil
 }
 
-func request(servers, tlsca, subject string, count int) error {
+func request(servers, tlsca, subject string, replyCount, count int) error {
 	nc, err := connect(servers, tlsca)
 	if err != nil {
 		return err
@@ -282,7 +287,7 @@ func request(servers, tlsca, subject string, count int) error {
 			time.Sleep(time.Second)
 		}
 
-		if err := requestOne(nc, i, subject); err != nil {
+		if err := requestOne(nc, i, subject, replyCount); err != nil {
 			return err
 		}
 	}
@@ -292,7 +297,7 @@ func request(servers, tlsca, subject string, count int) error {
 
 const MyReplySubjectHdr = "My-Reply-Subject"
 
-func requestOne(nc *nats.Conn, i int, subject string) error {
+func requestOne(nc *nats.Conn, i int, subject string, replyCount int) error {
 	replySubject := nc.NewRespInbox()
 
 	msg := nats.NewMsg(subject)
@@ -309,16 +314,20 @@ func requestOne(nc *nats.Conn, i int, subject string) error {
 	if err := nc.PublishMsg(msg); err != nil {
 		return err
 	}
-	start := time.Now()
 	log.Printf("i=%d, published msg.Data=%s", i, string(msg.Data))
 
-	timeout := 5 * time.Second
-	replyMsg, err := sub.NextMsg(timeout)
-	if err != nil {
-		return err
+	timeout := 2 * time.Second
+	for j := 0; j < replyCount; j++ {
+		replyMsg, err := sub.NextMsg(timeout)
+		if err != nil {
+			if errors.Is(err, nats.ErrTimeout) {
+				log.Printf("i=%d, j=%d, got timeout", i, j)
+				break
+			}
+			return err
+		}
+		log.Printf("i=%d, j=%d, reply msg.Data=%s", i, j, string(replyMsg.Data))
 	}
-	rtt := time.Since(start)
-	log.Printf("i=%d, reply msg.Data=%s, rtt=%s", i, string(replyMsg.Data), rtt)
 
 	return nil
 }
@@ -441,7 +450,12 @@ func reply(servers, tlsca, streamName, consumerName string, wait time.Duration, 
 
 	for i := 0; i < count; i++ {
 		log.Printf("i=%d", i)
+	retry:
 		if err := getNextMsgAndReply(nc, js, streamName, consumerName, wait); err != nil {
+			if errors.Is(err, nats.ErrMaxMessages) {
+				log.Print("got ErrMaxMessages in Fetch, continue")
+				goto retry
+			}
 			return err
 		}
 	}
@@ -457,7 +471,7 @@ func getNextMsgAndReply(nc *nats.Conn, js nats.JetStreamContext, stream, consume
 	sub.AutoUnsubscribe(1)
 
 	batch := 1
-	timeout := 5 * time.Second
+	timeout := 2 * time.Second
 	msgs, err := sub.Fetch(batch, nats.MaxWait(timeout))
 	if err != nil {
 		return err
@@ -506,8 +520,12 @@ func getNextMsgAndReply(nc *nats.Conn, js nats.JetStreamContext, stream, consume
 		return errors.New("reply subject header is not set")
 	}
 
+	if err := msg.Respond(nil); err != nil {
+		return err
+	}
+
 	replyMsg := nats.NewMsg(replySubject)
-	replyDataStr := fmt.Sprintf("reply for %s at %s", string(msg.Data), time.Now().Format(time.RFC3339Nano))
+	replyDataStr := fmt.Sprintf("reply from %s for %s at %s", consumer, string(msg.Data), time.Now().Format(time.RFC3339Nano))
 	replyMsg.Data = []byte(replyDataStr)
 	if err := nc.PublishMsg(replyMsg); err != nil {
 		return err
